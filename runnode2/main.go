@@ -11,7 +11,7 @@ func main() {
 		1: "localhost:1235",
 		2: "localhost:1236",
 	}
-	pages := []ivy.Page{}
+	pages := []*ivy.Page{}
 
 	ivy.NodeStart(2, 0, CMaddr, NodeAddr, pages, "localhost:1236")
 }

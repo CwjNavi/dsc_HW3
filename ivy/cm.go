@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"strings"
 	"sync"
 )
 
@@ -45,7 +46,8 @@ func (cm *CentralManager) handleReadRequest(args *ReadRequestArgs) (int, error) 
 
 func (cm *CentralManager) sendReadForward(nodeId int, args *ReadRequestArgs) error {
 	fmt.Println("Sending read forward to ", nodeId, "at", cm.nodeAddr[nodeId])
-	client, err := rpc.Dial("tcp", cm.nodeAddr[nodeId])
+	address := strings.TrimSpace(cm.nodeAddr[nodeId])
+	client, err := rpc.Dial("tcp", address)
 	if err != nil {
 		fmt.Println("Error connecting to node", err)
 		return err
@@ -78,6 +80,7 @@ func (cm *CentralManager) ReadRequest(args *ReadRequestArgs, res *ReadRequestRes
 	return nil
 }
 
+// ReadConfirm rpc called by the node
 func (cm *CentralManager) ReadConfirm(ReadConfirmArgs *ReadConfirmArgs, reply *ReadConfirmReply) error {
 	// check if the confirm matches the current request
 	cm.lock.Lock()
@@ -86,39 +89,12 @@ func (cm *CentralManager) ReadConfirm(ReadConfirmArgs *ReadConfirmArgs, reply *R
 	if cm.currentRequest.PageNum != ReadConfirmArgs.PageNum || cm.currentRequest.RequesterId != ReadConfirmArgs.RequesterId {
 		return errors.New("wrong confirm")
 	}
+	fmt.Println("Request completed for", ReadConfirmArgs)
 	cm.currentRequest = nil
 
+	reply.Confirm = true
+
 	return nil
-}
-
-func (cm *CentralManager) sendInvalidateMessage(nodeId int, pageNum int, requesterId int, clock int) (*InvalidateMessageArgs, error) {
-	// send invalidate message to node
-	return nil, nil
-}
-
-func (cm *CentralManager) handleWriteRequest(req *RequestMessage) (*ForwardMessage, error) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-	// find from page records
-	var owner int
-	var copySet []int
-	for _, pr := range cm.PageRecords {
-		if pr.PageNum == req.PageNum {
-			owner = pr.Owner
-			copySet = pr.CopySet
-			break
-		}
-	}
-	if owner == 0 {
-		return nil, errors.New("page not found")
-	}
-
-	// for each node in copyset, send invalidate message
-	for _, nodeId := range copySet {
-		cm.sendInvalidateMessage(nodeId, req.PageNum, req.RequesterId, req.Clock)
-	}
-
-	return &ForwardMessage{req.PageNum, req.RequesterId, req.Clock, WRITEFORWARD}, nil
 }
 
 func RegisterCM(CMID int, clock int, nodeAddr map[int]string, pageRecords []PageRecord, CMaddr string) {
@@ -137,7 +113,6 @@ func RegisterCM(CMID int, clock int, nodeAddr map[int]string, pageRecords []Page
 		fmt.Println("Error registering CentralManager", err)
 		return
 	}
-	rpc.HandleHTTP()
 
 	listener, err := net.Listen("tcp", CMaddr)
 	if err != nil {

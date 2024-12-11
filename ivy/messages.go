@@ -45,6 +45,7 @@ type ReadForwardResponse struct {
 type SendPageArgs struct {
 	PageNum int
 	Content string
+	OwnerId int
 }
 
 // no reply expected

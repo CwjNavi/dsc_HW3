@@ -5,23 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"strings"
 )
-
-type writeForward struct {
-	pageNum     int
-	requesterId int
-}
-
-type readForward struct {
-	pageNum     int
-	requesterId int
-}
-
-type SendPageReply struct{} // not expecting any reply when sending a page to another node
 
 type Node struct {
 	Id             int
-	Pages          []Page
+	Pages          []*Page
 	currentCM      int
 	CMaddr         map[int]string
 	Nodeaddr       map[int]string
@@ -36,7 +25,8 @@ type Page struct {
 
 func (node *Node) ReadRequestFromCM(pageNum int) error {
 	// make an RPC call to the CM to get the page
-	client, err := rpc.Dial("tcp", node.CMaddr[node.currentCM])
+	address := strings.TrimSpace(node.CMaddr[node.currentCM])
+	client, err := rpc.Dial("tcp", address)
 	if err != nil {
 		fmt.Println("Error connecting to CM", err)
 		return err
@@ -80,7 +70,7 @@ func (node *Node) ReadForward(args *ReadForwardArgs, res *ReadForwardResponse) e
 	var requestedPage *Page
 	for _, page := range node.Pages {
 		if page.PageNum == args.PageNum {
-			requestedPage = &page
+			requestedPage = page
 			break
 		}
 	}
@@ -91,14 +81,15 @@ func (node *Node) ReadForward(args *ReadForwardArgs, res *ReadForwardResponse) e
 	fmt.Println("Updated page record", node.Pages)
 
 	// send the page to the requester
-	client, err := rpc.Dial("tcp", node.CMaddr[args.RequesterId])
+	address := strings.TrimSpace(node.Nodeaddr[args.RequesterId])
+	client, err := rpc.Dial("tcp", address)
 	if err != nil {
 		fmt.Println("Error connecting to requester")
 		return err
 	}
 	defer client.Close()
 
-	SendPageArgs := &SendPageArgs{requestedPage.PageNum, requestedPage.Content}
+	SendPageArgs := &SendPageArgs{requestedPage.PageNum, requestedPage.Content, node.Id}
 	SendPageResponse := &SendPageResponse{}
 
 	err = client.Call("Node.SendPage", SendPageArgs, SendPageResponse)
@@ -111,7 +102,8 @@ func (node *Node) ReadForward(args *ReadForwardArgs, res *ReadForwardResponse) e
 
 func (node *Node) sendReadConfirmation(request *Request) error {
 	// send a confirmation to the CM
-	client, err := rpc.Dial("tcp", node.CMaddr[node.currentCM])
+	address := strings.TrimSpace(node.CMaddr[node.currentCM])
+	client, err := rpc.Dial("tcp", address)
 	if err != nil {
 		fmt.Println("Error connecting to CM", err)
 		return err
@@ -132,6 +124,8 @@ func (node *Node) sendReadConfirmation(request *Request) error {
 		return errors.New("read confirmation failed")
 	}
 
+	fmt.Println("Read confirmed")
+
 	return nil
 }
 
@@ -144,7 +138,7 @@ func (node *Node) handleSendPage(args *SendPageArgs) error {
 
 	// update the page in the cache
 	newPage := Page{PageNum: args.PageNum, Content: args.Content, Access: READ}
-	node.Pages = append(node.Pages, newPage)
+	node.Pages = append(node.Pages, &newPage)
 
 	// send a confirmation to the CM
 	node.sendReadConfirmation(node.currentRequest)
@@ -158,7 +152,7 @@ func (node *Node) SendPage(args *SendPageArgs, response *SendPageResponse) error
 	return nil
 }
 
-func NodeStart(nodeId int, currentCM int, CMaddr map[int]string, Nodeaddr map[int]string, pages []Page, currentNodeAddr string) {
+func NodeStart(nodeId int, currentCM int, CMaddr map[int]string, Nodeaddr map[int]string, pages []*Page, currentNodeAddr string) {
 	node := &Node{
 		Id:             nodeId,
 		Pages:          pages,
@@ -172,7 +166,7 @@ func NodeStart(nodeId int, currentCM int, CMaddr map[int]string, Nodeaddr map[in
 	if err != nil {
 		fmt.Println("Error registering Node")
 	}
-	rpc.HandleHTTP()
+
 	fmt.Println("running node ", nodeId, " at ", currentNodeAddr)
 
 	go func() {
@@ -211,14 +205,19 @@ func NodeStart(nodeId int, currentCM int, CMaddr map[int]string, Nodeaddr map[in
 			}
 
 			// Call the node's `readFrom` method
-			_, content := node.readFrom(pageNum)
-			fmt.Println(content)
+			isLocalRead, content := node.readFrom(pageNum)
+
+			if isLocalRead {
+				fmt.Println(content)
+			} else {
+				fmt.Println("Page not found in cache. Request sent to CM.")
+			}
 
 		case "pages":
 			// List all cached pages
 			fmt.Println("Cached pages:")
 			for _, page := range node.Pages {
-				fmt.Printf("Page %d: %s: %s\n", page.PageNum, page.Content, page.Access)
+				fmt.Printf("Page %d: %s: %d\n", page.PageNum, page.Content, page.Access)
 			}
 
 		case "exit":
