@@ -5,6 +5,7 @@ type Request struct {
 	RequesterId int
 	Clock       int
 	TypeOfReq   int
+	Content     string
 }
 
 // sent from node to CM
@@ -59,13 +60,47 @@ type ReadConfirmArgs struct {
 }
 
 type ReadConfirmResponse struct {
+	Confirm bool
+}
+
+type WriteRequestArgs struct {
+	PageNum     int
+	Content     string
+	RequesterId int
+	Clock       int
+}
+
+// no reply expected
+type WriteRequestResponse struct {
+}
+
+type InvalidateArgs struct {
+	PageNum int
+}
+
+type InvalidateResponse struct {
+	Ack bool
+}
+
+type WriteForwardArgs struct {
+	PageNum     int
+	Content     string
+	RequesterId int
+	Clock       int
+}
+
+// no reply expected
+type WriteForwardResponse struct {
+}
+
+type WriteConfirmArgs struct {
 	PageNum     int
 	RequesterId int
 	Clock       int
-	Confirm     bool
 }
 
-type ReadConfirmReply struct {
+// no reply expected
+type WriteConfirmResponse struct {
 	Confirm bool
 }
 

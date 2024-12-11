@@ -13,7 +13,7 @@ type CentralManager struct {
 	Id             int
 	clock          int
 	nodeAddr       map[int]string
-	PageRecords    []PageRecord
+	PageRecords    []*PageRecord
 	lock           sync.RWMutex
 	currentRequest *Request // to keep track of the current request
 }
@@ -81,7 +81,7 @@ func (cm *CentralManager) ReadRequest(args *ReadRequestArgs, res *ReadRequestRes
 }
 
 // ReadConfirm rpc called by the node
-func (cm *CentralManager) ReadConfirm(ReadConfirmArgs *ReadConfirmArgs, reply *ReadConfirmReply) error {
+func (cm *CentralManager) ReadConfirm(ReadConfirmArgs *ReadConfirmArgs, response *ReadConfirmResponse) error {
 	// check if the confirm matches the current request
 	cm.lock.Lock()
 	defer cm.lock.Unlock()
@@ -92,12 +92,110 @@ func (cm *CentralManager) ReadConfirm(ReadConfirmArgs *ReadConfirmArgs, reply *R
 	fmt.Println("Request completed for", ReadConfirmArgs)
 	cm.currentRequest = nil
 
-	reply.Confirm = true
+	response.Confirm = true
 
 	return nil
 }
 
-func RegisterCM(CMID int, clock int, nodeAddr map[int]string, pageRecords []PageRecord, CMaddr string) {
+// WriteConfirm rpc called by the node
+func (cm *CentralManager) WriteConfirm(WriteConfirmArgs *WriteConfirmArgs, response *WriteConfirmResponse) error {
+	// check if the confirm matches the current request
+	cm.lock.Lock()
+	defer cm.lock.Unlock()
+
+	if cm.currentRequest.PageNum != WriteConfirmArgs.PageNum || cm.currentRequest.RequesterId != WriteConfirmArgs.RequesterId {
+		return errors.New("wrong confirm")
+	}
+	fmt.Println("Request completed for", WriteConfirmArgs)
+	cm.currentRequest = nil
+
+	response.Confirm = true
+
+	return nil
+}
+
+func (cm *CentralManager) sendWriteForward(ownerId int, args *WriteRequestArgs) error {
+	fmt.Println("Sending write forward to ", ownerId, "at", cm.nodeAddr[ownerId])
+	address := strings.TrimSpace(cm.nodeAddr[ownerId])
+	client, err := rpc.Dial("tcp", address)
+	if err != nil {
+		fmt.Println("Error connecting to node", err)
+		return err
+	}
+	defer client.Close()
+
+	writeForwardArgs := &WriteForwardArgs{PageNum: args.PageNum, Content: args.Content, RequesterId: args.RequesterId, Clock: args.Clock}
+	writeForwardResponse := &WriteForwardResponse{}
+
+	err = client.Call("Node.WriteForward", writeForwardArgs, writeForwardResponse)
+	if err != nil {
+		fmt.Println("Error calling WriteForward to", ownerId, err)
+		return err
+	}
+
+	return nil
+}
+
+// WriteRequest rpc called by the node to write a page
+func (cm *CentralManager) WriteRequest(args *WriteRequestArgs, res *WriteRequestResponse) error {
+	cm.lock.Lock()
+	defer cm.lock.Unlock()
+
+	// find the page record
+	var pr *PageRecord
+	for _, pageRecord := range cm.PageRecords {
+		if pageRecord.PageNum == args.PageNum {
+			pr = pageRecord
+			break
+		}
+	}
+
+	if pr == nil {
+		return errors.New("page not found")
+	}
+
+	// invalidate pages in the copy set
+	for _, nodeId := range pr.CopySet {
+		address := strings.TrimSpace(cm.nodeAddr[nodeId])
+		client, err := rpc.Dial("tcp", address)
+		if err != nil {
+			fmt.Println("Error connecting to node", err)
+		}
+		defer client.Close()
+
+		req := &InvalidateArgs{PageNum: args.PageNum}
+		res := &InvalidateResponse{}
+
+		err = client.Call("Node.Invalidate", req, res)
+		if err != nil {
+			logInfo(fmt.Sprintf("Error calling Invalidate: %s", err))
+			return err
+		}
+
+		if !res.Ack {
+			logInfo(fmt.Sprintf("Invalidate failed for node %d", nodeId))
+		}
+
+		// remove node from copyset
+		newCopySet := []int{}
+		for _, node := range pr.CopySet {
+			if node != nodeId {
+				newCopySet = append(newCopySet, node)
+			}
+		}
+		pr.CopySet = newCopySet
+		logInfo(fmt.Sprintf("Removed node %d from copyset, current copyset %v", nodeId, pr.CopySet))
+
+		return nil
+	}
+
+	logInfo(fmt.Sprintf("Sending write forward to node %d", pr.Owner))
+	cm.sendWriteForward(pr.Owner, args)
+
+	return nil
+}
+
+func RegisterCM(CMID int, clock int, nodeAddr map[int]string, pageRecords []*PageRecord, CMaddr string) {
 
 	cm := &CentralManager{
 		Id:             CMID,
